@@ -1,0 +1,482 @@
+import { useRef, useState } from "react";
+import { useActiveEvent } from "../lib/useActiveEvent";
+import { useLiveRequests, ANON_SAFE_REQUEST_COLUMNS } from "../lib/useLiveRequests";
+import { groupRequests, normalize } from "../lib/songGroup";
+import { searchITunes, type ITunesResult } from "../lib/itunes";
+import { createRequest } from "../lib/api";
+import { supabase } from "../lib/supabase";
+import { T } from "../lib/theme";
+import type { SongRow, Tier } from "../lib/types";
+
+type Selection = { title: string; artist: string; bpm: number | null; songId: string | null };
+
+type TierDef = { id: Tier; label: string; amount: number };
+
+const TIER_DEFS: TierDef[] = [
+  { id: "free", label: "Free request", amount: 0 },
+  { id: "boost", label: "Boost — $5", amount: 5 },
+  { id: "front", label: "Front of line — $20", amount: 20 },
+];
+
+function tierNote(t: TierDef, paymentsEnabled: boolean): string {
+  if (t.id === "free") return "Joins the open pool";
+  if (!paymentsEnabled) return "Free tonight";
+  return t.id === "boost" ? "Sorts above free requests" : "Top of the DJ's queue";
+}
+
+export default function AttendeePage() {
+  const { event, loading: eventLoading, error: eventError } = useActiveEvent();
+  const { requests } = useLiveRequests(event?.id ?? null, ANON_SAFE_REQUEST_COLUMNS);
+
+  const [mode, setMode] = useState<"setlist" | "itunes">("setlist");
+  const [query, setQuery] = useState("");
+  const [setlistResults, setSetlistResults] = useState<SongRow[]>([]);
+  const [itunesResults, setItunesResults] = useState<ITunesResult[]>([]);
+  const [picked, setPicked] = useState<Selection | null>(null);
+  const [requesterName, setRequesterName] = useState("");
+  const [vipCode, setVipCode] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [pulseKey, setPulseKey] = useState<string | null>(null);
+  const searchSeq = useRef(0);
+
+  const results = mode === "setlist" ? setlistResults : itunesResults;
+
+  async function runSearch(term: string) {
+    setQuery(term);
+    setPicked(null);
+    const seq = ++searchSeq.current;
+
+    if (mode === "setlist") {
+      if (!event || !term.trim()) {
+        setSetlistResults([]);
+        return;
+      }
+      const { data } = await supabase
+        .from("songs")
+        .select("*")
+        .eq("event_id", event.id)
+        .or(`title.ilike.%${term}%,artist.ilike.%${term}%`)
+        .limit(8);
+      if (seq === searchSeq.current) setSetlistResults((data as SongRow[]) ?? []);
+    } else {
+      if (!term.trim()) {
+        setItunesResults([]);
+        return;
+      }
+      const found = await searchITunes(term);
+      if (seq === searchSeq.current) setItunesResults(found);
+    }
+  }
+
+  function switchMode(next: "setlist" | "itunes") {
+    setMode(next);
+    setQuery("");
+    setSetlistResults([]);
+    setItunesResults([]);
+    setPicked(null);
+  }
+
+  async function submit(t: TierDef) {
+    if (!picked || !requesterName.trim() || submitting) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      await createRequest({
+        title: picked.title,
+        artist: picked.artist,
+        bpm: picked.bpm,
+        songId: picked.songId,
+        tier: t.id,
+        requesterName: requesterName.trim(),
+        vipCode: vipCode.trim() || undefined,
+      });
+      const key = `${normalize(picked.title)}::${normalize(picked.artist)}`;
+      setPulseKey(key);
+      setTimeout(() => setPulseKey(null), 900);
+      setToast(
+        t.amount > 0
+          ? `$${t.amount} hold placed — charged only if the DJ plays it`
+          : "Request sent to the DJ",
+      );
+      setTimeout(() => setToast(null), 2600);
+      setPicked(null);
+      setQuery("");
+      setSetlistResults([]);
+      setItunesResults([]);
+      setVipCode("");
+    } catch (err) {
+      setSubmitError((err as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (eventLoading) {
+    return (
+      <div style={{ minHeight: "100vh", background: T.room, color: T.muted, padding: 20 }}>Loading…</div>
+    );
+  }
+  if (eventError || !event) {
+    return (
+      <div style={{ minHeight: "100vh", background: T.room, color: T.muted, padding: 20 }}>
+        Event not found.
+      </div>
+    );
+  }
+
+  const sorted = event.public_queue_mode === "hidden" ? [] : groupRequests(requests);
+  const canSubmit = !!picked && requesterName.trim().length > 0 && !submitting;
+
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        background: T.room,
+        color: T.ink,
+        fontFamily: "'Archivo', 'Helvetica Neue', sans-serif",
+      }}
+    >
+      <div style={{ maxWidth: 420, margin: "0 auto", padding: "20px 16px 80px" }}>
+        <header style={{ marginBottom: 22 }}>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 10 }}>
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 3, paddingBottom: 6 }}>
+              {[
+                ["eq1", 0],
+                ["eq2", 0.15],
+                ["eq3", 0.3],
+              ].map(([a, d], i) => (
+                <span
+                  key={i}
+                  className="eqbar"
+                  style={{
+                    width: 4,
+                    borderRadius: 2,
+                    background: T.grad,
+                    animation: `${a} .9s ease-in-out ${d}s infinite`,
+                  }}
+                />
+              ))}
+            </div>
+            <h1 style={{ margin: 0, fontWeight: 900, fontSize: 30, lineHeight: 1, letterSpacing: "-.02em" }}>
+              {event.name}
+            </h1>
+          </div>
+          <p style={{ margin: "6px 0 0", color: T.muted, fontSize: 14 }}>
+            The DJ is taking requests — search below to add yours.
+          </p>
+        </header>
+
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          {(["setlist", "itunes"] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => switchMode(m)}
+              style={{
+                padding: "8px 18px",
+                borderRadius: 99,
+                border: `1px solid ${mode === m ? "transparent" : T.line}`,
+                background: mode === m ? T.grad : "transparent",
+                color: mode === m ? "#1A0A12" : T.muted,
+                fontWeight: 700,
+                fontSize: 13,
+                letterSpacing: ".02em",
+              }}
+            >
+              {m === "setlist" ? "Setlist" : "Search any song"}
+            </button>
+          ))}
+        </div>
+
+        <input
+          value={query}
+          onChange={(e) => runSearch(e.target.value)}
+          placeholder="Search a song or artist…"
+          style={{
+            width: "100%",
+            boxSizing: "border-box",
+            padding: "14px 16px",
+            fontSize: 16,
+            borderRadius: 14,
+            border: `1px solid ${T.line}`,
+            background: T.surface,
+            color: T.ink,
+          }}
+        />
+
+        {results.length > 0 && !picked && (
+          <div
+            className="rise"
+            style={{ marginTop: 10, borderRadius: 14, border: `1px solid ${T.line}`, overflow: "hidden" }}
+          >
+            {mode === "setlist"
+              ? setlistResults.map((s, i) => (
+                  <button
+                    key={s.id}
+                    onClick={() => setPicked({ title: s.title, artist: s.artist, bpm: s.bpm, songId: s.id })}
+                    style={{
+                      display: "flex",
+                      width: "100%",
+                      textAlign: "left",
+                      alignItems: "center",
+                      gap: 12,
+                      padding: "12px 14px",
+                      background: T.surface,
+                      border: "none",
+                      borderTop: i ? `1px solid ${T.line}` : "none",
+                      color: T.ink,
+                    }}
+                  >
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 600, fontSize: 15 }}>{s.title}</div>
+                      <div style={{ color: T.muted, fontSize: 13 }}>{s.artist}</div>
+                    </div>
+                    <span style={{ color: T.hot, fontWeight: 700, fontSize: 13 }}>Request →</span>
+                  </button>
+                ))
+              : itunesResults.map((r, i) => (
+                  <button
+                    key={r.trackId}
+                    onClick={() =>
+                      setPicked({ title: r.trackName, artist: r.artistName, bpm: null, songId: null })
+                    }
+                    style={{
+                      display: "flex",
+                      width: "100%",
+                      textAlign: "left",
+                      alignItems: "center",
+                      gap: 12,
+                      padding: "12px 14px",
+                      background: T.surface,
+                      border: "none",
+                      borderTop: i ? `1px solid ${T.line}` : "none",
+                      color: T.ink,
+                    }}
+                  >
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 600, fontSize: 15 }}>{r.trackName}</div>
+                      <div style={{ color: T.muted, fontSize: 13 }}>{r.artistName}</div>
+                    </div>
+                    <span style={{ color: T.hot, fontWeight: 700, fontSize: 13 }}>Request →</span>
+                  </button>
+                ))}
+          </div>
+        )}
+        {query && results.length === 0 && !picked && (
+          <p style={{ color: T.muted, fontSize: 14, marginTop: 12 }}>
+            Nothing matched — try another spelling, or ask the DJ directly.
+          </p>
+        )}
+
+        {picked && (
+          <div
+            className="rise"
+            style={{
+              marginTop: 14,
+              borderRadius: 16,
+              border: `1px solid ${T.line}`,
+              background: T.surface,
+              padding: 16,
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+              <div>
+                <div style={{ fontWeight: 900, fontSize: 18 }}>{picked.title}</div>
+                <div style={{ color: T.muted, fontSize: 13 }}>{picked.artist}</div>
+              </div>
+              <button
+                onClick={() => setPicked(null)}
+                style={{ background: "none", border: "none", color: T.muted, fontSize: 13 }}
+              >
+                Cancel
+              </button>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+              <input
+                value={requesterName}
+                onChange={(e) => setRequesterName(e.target.value)}
+                placeholder="Your name"
+                style={{
+                  flex: 1,
+                  padding: "10px 12px",
+                  fontSize: 14,
+                  borderRadius: 10,
+                  border: `1px solid ${T.line}`,
+                  background: T.room,
+                  color: T.ink,
+                }}
+              />
+              <input
+                value={vipCode}
+                onChange={(e) => setVipCode(e.target.value)}
+                placeholder="VIP code (optional)"
+                style={{
+                  flex: 1,
+                  padding: "10px 12px",
+                  fontSize: 14,
+                  borderRadius: 10,
+                  border: `1px solid ${T.line}`,
+                  background: T.room,
+                  color: T.ink,
+                }}
+              />
+            </div>
+
+            <div style={{ display: "grid", gap: 8, marginTop: 14 }}>
+              {TIER_DEFS.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => submit(t)}
+                  disabled={!canSubmit}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "13px 14px",
+                    borderRadius: 12,
+                    textAlign: "left",
+                    border: t.amount ? "none" : `1px solid ${T.line}`,
+                    background: t.amount ? T.grad : "transparent",
+                    color: t.amount ? "#1A0A12" : T.ink,
+                    fontWeight: 700,
+                    fontSize: 15,
+                    opacity: canSubmit ? 1 : 0.5,
+                    cursor: canSubmit ? "pointer" : "not-allowed",
+                  }}
+                >
+                  <span>{t.label}</span>
+                  <span style={{ fontWeight: 400, fontSize: 12, opacity: 0.75 }}>
+                    {tierNote(t, event.payments_enabled)}
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            {!requesterName.trim() && (
+              <p style={{ color: T.muted, fontSize: 12, marginTop: 10, marginBottom: 0 }}>
+                Enter your name to send this request.
+              </p>
+            )}
+            {submitError && (
+              <p style={{ color: T.hot, fontSize: 12, marginTop: 10, marginBottom: 0 }}>{submitError}</p>
+            )}
+            <p style={{ color: T.muted, fontSize: 12, marginTop: 12, marginBottom: 0 }}>
+              Paid requests are only charged if the DJ plays your song. No refunds unless authorized by
+              the DJ.
+            </p>
+          </div>
+        )}
+
+        <section style={{ marginTop: 28 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+            <span
+              style={{
+                width: 7,
+                height: 7,
+                borderRadius: 99,
+                background: T.hot,
+                boxShadow: `0 0 0 3px ${T.hot}22`,
+              }}
+            />
+            <h2
+              style={{
+                margin: 0,
+                fontSize: 13,
+                letterSpacing: ".14em",
+                color: T.muted,
+                fontWeight: 700,
+                textTransform: "uppercase",
+              }}
+            >
+              What the crowd wants — live
+            </h2>
+          </div>
+          <p style={{ margin: "0 0 10px", color: T.muted, fontSize: 12 }}>
+            Top requests right now. Search above to add yours.
+          </p>
+          {sorted.length === 0 ? (
+            <p style={{ color: T.muted, fontSize: 14 }}>No requests yet — yours could open the night.</p>
+          ) : (
+            <div style={{ borderTop: `1px solid ${T.line}` }}>
+              {sorted.map((g, i) => (
+                <div
+                  key={g.key}
+                  className={pulseKey === g.key ? "pump" : ""}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    padding: "10px 4px",
+                    borderBottom: `1px solid ${T.line}`,
+                  }}
+                >
+                  <span
+                    style={{
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: g.isVip ? T.warm : T.muted,
+                      minWidth: 18,
+                      textAlign: "right",
+                    }}
+                  >
+                    {i + 1}
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontWeight: 600,
+                        fontSize: 14,
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      {g.title}
+                      {g.isVip && (
+                        <span style={{ color: T.warm, fontSize: 10, fontWeight: 700, marginLeft: 8, letterSpacing: ".08em" }}>
+                          VIP
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ color: T.muted, fontSize: 12 }}>
+                      {g.artist} · {g.count} {g.count === 1 ? "request" : "requests"}
+                    </div>
+                  </div>
+                  {g.totalAmount > 0 && (
+                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, fontSize: 14, color: T.hot }}>
+                      ${(g.totalAmount / 100).toFixed(0)}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {toast && (
+          <div
+            className="rise"
+            style={{
+              position: "fixed",
+              left: "50%",
+              bottom: 24,
+              transform: "translateX(-50%)",
+              background: T.grad,
+              color: "#1A0A12",
+              fontWeight: 700,
+              fontSize: 14,
+              padding: "12px 20px",
+              borderRadius: 99,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {toast}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,83 @@
+@import url("https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;900&family=JetBrains+Mono:wght@400;700&display=swap");
+
+@keyframes pump {
+  0% {
+    transform: scale(1);
+  }
+  30% {
+    transform: scale(1.18);
+  }
+  60% {
+    transform: scale(0.96);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes eq1 {
+  0%,
+  100% {
+    height: 6px;
+  }
+  50% {
+    height: 18px;
+  }
+}
+@keyframes eq2 {
+  0%,
+  100% {
+    height: 14px;
+  }
+  50% {
+    height: 5px;
+  }
+}
+@keyframes eq3 {
+  0%,
+  100% {
+    height: 9px;
+  }
+  50% {
+    height: 16px;
+  }
+}
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.pump {
+  animation: pump 0.8s ease;
+}
+.rise {
+  animation: rise 0.25s ease;
+}
+
+button {
+  cursor: pointer;
+  font-family: inherit;
+}
+button:focus-visible {
+  outline: 2px solid #ffb35c;
+  outline-offset: 2px;
+}
+input:focus-visible {
+  outline: 2px solid #ff4d8d;
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pump,
+  .rise {
+    animation: none;
+  }
+  .eqbar {
+    animation: none !important;
+  }
+}
