@@ -6,6 +6,7 @@ import { searchITunes, type ITunesResult } from "../lib/itunes";
 import { createRequest } from "../lib/api";
 import { supabase } from "../lib/supabase";
 import { T } from "../lib/theme";
+import PaidCheckout from "../components/PaidCheckout";
 import type { SongRow, Tier } from "../lib/types";
 
 type Selection = { title: string; artist: string; bpm: number | null; songId: string | null };
@@ -39,6 +40,7 @@ export default function AttendeePage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [pulseKey, setPulseKey] = useState<string | null>(null);
+  const [checkout, setCheckout] = useState<{ clientSecret: string; tier: TierDef } | null>(null);
   const searchSeq = useRef(0);
 
   const results = mode === "setlist" ? setlistResults : itunesResults;
@@ -78,12 +80,32 @@ export default function AttendeePage() {
     setPicked(null);
   }
 
-  async function submit(t: TierDef) {
+  function finishSuccess(t: TierDef) {
+    if (picked) {
+      const key = `${normalize(picked.title)}::${normalize(picked.artist)}`;
+      setPulseKey(key);
+      setTimeout(() => setPulseKey(null), 900);
+    }
+    setToast(
+      t.amount > 0
+        ? `$${t.amount} hold placed — charged only if the DJ plays it`
+        : "Request sent to the DJ",
+    );
+    setTimeout(() => setToast(null), 2600);
+    setCheckout(null);
+    setPicked(null);
+    setQuery("");
+    setSetlistResults([]);
+    setItunesResults([]);
+    setVipCode("");
+  }
+
+  async function chooseTier(t: TierDef) {
     if (!picked || !requesterName.trim() || submitting) return;
     setSubmitting(true);
     setSubmitError(null);
     try {
-      await createRequest({
+      const { clientSecret } = await createRequest({
         title: picked.title,
         artist: picked.artist,
         bpm: picked.bpm,
@@ -92,20 +114,13 @@ export default function AttendeePage() {
         requesterName: requesterName.trim(),
         vipCode: vipCode.trim() || undefined,
       });
-      const key = `${normalize(picked.title)}::${normalize(picked.artist)}`;
-      setPulseKey(key);
-      setTimeout(() => setPulseKey(null), 900);
-      setToast(
-        t.amount > 0
-          ? `$${t.amount} hold placed — charged only if the DJ plays it`
-          : "Request sent to the DJ",
-      );
-      setTimeout(() => setToast(null), 2600);
-      setPicked(null);
-      setQuery("");
-      setSetlistResults([]);
-      setItunesResults([]);
-      setVipCode("");
+      if (clientSecret) {
+        // Paid tier: the row is created but the hold isn't placed yet —
+        // drop into Stripe checkout to actually authorize the card.
+        setCheckout({ clientSecret, tier: t });
+      } else {
+        finishSuccess(t);
+      }
     } catch (err) {
       setSubmitError((err as Error).message);
     } finally {
@@ -324,37 +339,48 @@ export default function AttendeePage() {
               />
             </div>
 
-            <div style={{ display: "grid", gap: 8, marginTop: 14 }}>
-              {TIER_DEFS.map((t) => (
-                <button
-                  key={t.id}
-                  onClick={() => submit(t)}
-                  disabled={!canSubmit}
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    padding: "13px 14px",
-                    borderRadius: 12,
-                    textAlign: "left",
-                    border: t.amount ? "none" : `1px solid ${T.line}`,
-                    background: t.amount ? T.grad : "transparent",
-                    color: t.amount ? "#1A0A12" : T.ink,
-                    fontWeight: 700,
-                    fontSize: 15,
-                    opacity: canSubmit ? 1 : 0.5,
-                    cursor: canSubmit ? "pointer" : "not-allowed",
-                  }}
-                >
-                  <span>{t.label}</span>
-                  <span style={{ fontWeight: 400, fontSize: 12, opacity: 0.75 }}>
-                    {tierNote(t, event.payments_enabled)}
-                  </span>
-                </button>
-              ))}
-            </div>
+            {!checkout && (
+              <div style={{ display: "grid", gap: 8, marginTop: 14 }}>
+                {TIER_DEFS.map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => chooseTier(t)}
+                    disabled={!canSubmit}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      padding: "13px 14px",
+                      borderRadius: 12,
+                      textAlign: "left",
+                      border: t.amount ? "none" : `1px solid ${T.line}`,
+                      background: t.amount ? T.grad : "transparent",
+                      color: t.amount ? "#1A0A12" : T.ink,
+                      fontWeight: 700,
+                      fontSize: 15,
+                      opacity: canSubmit ? 1 : 0.5,
+                      cursor: canSubmit ? "pointer" : "not-allowed",
+                    }}
+                  >
+                    <span>{t.label}</span>
+                    <span style={{ fontWeight: 400, fontSize: 12, opacity: 0.75 }}>
+                      {tierNote(t, event.payments_enabled)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
 
-            {!requesterName.trim() && (
+            {checkout && (
+              <PaidCheckout
+                clientSecret={checkout.clientSecret}
+                amountLabel={`$${checkout.tier.amount}`}
+                onSuccess={() => finishSuccess(checkout.tier)}
+                onCancel={() => setCheckout(null)}
+              />
+            )}
+
+            {!checkout && !requesterName.trim() && (
               <p style={{ color: T.muted, fontSize: 12, marginTop: 10, marginBottom: 0 }}>
                 Enter your name to send this request.
               </p>
@@ -362,10 +388,12 @@ export default function AttendeePage() {
             {submitError && (
               <p style={{ color: T.hot, fontSize: 12, marginTop: 10, marginBottom: 0 }}>{submitError}</p>
             )}
-            <p style={{ color: T.muted, fontSize: 12, marginTop: 12, marginBottom: 0 }}>
-              Paid requests are only charged if the DJ plays your song. No refunds unless authorized by
-              the DJ.
-            </p>
+            {!checkout && (
+              <p style={{ color: T.muted, fontSize: 12, marginTop: 12, marginBottom: 0 }}>
+                Paid requests are only charged if the DJ plays your song. No refunds unless authorized by
+                the DJ.
+              </p>
+            )}
           </div>
         )}
 

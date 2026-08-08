@@ -1,4 +1,4 @@
-import type { Tier } from "./types";
+import type { RequestRow, Tier } from "./types";
 
 const API_URL = import.meta.env.VITE_API_URL as string;
 
@@ -20,7 +20,7 @@ export async function createRequest(payload: CreateRequestPayload) {
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? "Request failed");
-  return data;
+  return data as { request: RequestRow; clientSecret: string | null };
 }
 
 export async function decideSongGroup(

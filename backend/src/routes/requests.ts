@@ -3,6 +3,7 @@ import { supabaseAdmin } from "../lib/supabase.js";
 import { getActiveEvent } from "../lib/event.js";
 import { normalize, decodeSongGroup } from "../lib/songGroup.js";
 import { requireDj } from "../middleware/requireDj.js";
+import { getStripe } from "../lib/stripe.js";
 
 export const requestsRouter = Router();
 
@@ -33,10 +34,29 @@ requestsRouter.post("/requests", async (req, res) => {
   const effectiveTier = event.payments_enabled ? requestedTier : "free";
   const amount = event.payments_enabled ? TIER_AMOUNTS[effectiveTier] : 0;
 
+  let stripePaymentIntentId: string | null = null;
+  let clientSecret: string | null = null;
+
   if (event.payments_enabled && amount > 0) {
-    // Phase 2 will branch here to create a manual-capture PaymentIntent and return a client secret.
-    res.status(501).json({ error: "Paid requests are not wired up yet" });
-    return;
+    // Manual capture: this only authorizes (holds) the card. Nothing is
+    // charged until the DJ plays the song and Node explicitly captures it.
+    const paymentIntent = await getStripe().paymentIntents.create({
+      amount,
+      currency: "usd",
+      capture_method: "manual",
+      // allow_redirects: "never" restricts this to card + wallets (Apple/Google
+      // Pay) — no Klarna/Cash App/Amazon Pay/Link, which are redirect-based
+      // and require a return_url the confirm flow doesn't provide.
+      automatic_payment_methods: { enabled: true, allow_redirects: "never" },
+      metadata: {
+        event_id: event.id,
+        tier: effectiveTier,
+        title: title.trim(),
+        artist: artist.trim(),
+      },
+    });
+    stripePaymentIntentId = paymentIntent.id;
+    clientSecret = paymentIntent.client_secret;
   }
 
   const { data, error } = await supabaseAdmin
@@ -52,6 +72,7 @@ requestsRouter.post("/requests", async (req, res) => {
       is_vip: isVip,
       requester_name: requesterName.trim(),
       status: "pending",
+      stripe_payment_intent_id: stripePaymentIntentId,
     })
     .select()
     .single();
@@ -61,39 +82,65 @@ requestsRouter.post("/requests", async (req, res) => {
     return;
   }
 
-  res.status(201).json({ request: data });
+  res.status(201).json({ request: data, clientSecret });
 });
 
-async function updateSongGroupStatus(songGroupParam: string, status: "accepted" | "rejected") {
+type PendingRow = { id: string; title: string; artist: string; stripe_payment_intent_id: string | null };
+
+async function findPendingGroup(songGroupParam: string): Promise<PendingRow[]> {
   const event = await getActiveEvent();
   const { title, artist } = decodeSongGroup(songGroupParam);
   const wantTitle = normalize(title);
   const wantArtist = normalize(artist);
 
-  const { data: pending, error: fetchError } = await supabaseAdmin
+  const { data: pending, error } = await supabaseAdmin
     .from("requests")
-    .select("id, title, artist")
+    .select("id, title, artist, stripe_payment_intent_id")
     .eq("event_id", event.id)
     .eq("status", "pending");
+  if (error) throw new Error(error.message);
 
-  if (fetchError) throw new Error(fetchError.message);
-
-  const ids = (pending ?? [])
-    .filter((r) => normalize(r.title) === wantTitle && normalize(r.artist) === wantArtist)
-    .map((r) => r.id);
-
-  if (ids.length === 0) return { updated: 0 };
-
-  const { error: updateError } = await supabaseAdmin.from("requests").update({ status }).in("id", ids);
-  if (updateError) throw new Error(updateError.message);
-
-  return { updated: ids.length };
+  return (pending ?? []).filter(
+    (r) => normalize(r.title) === wantTitle && normalize(r.artist) === wantArtist,
+  );
 }
 
 requestsRouter.post("/requests/:songGroup/accept", requireDj, async (req, res) => {
   try {
-    const result = await updateSongGroupStatus(String(req.params.songGroup), "accepted");
-    res.json(result);
+    const matches = await findPendingGroup(String(req.params.songGroup));
+    if (matches.length === 0) {
+      res.json({ updated: 0 });
+      return;
+    }
+
+    const acceptedIds: string[] = [];
+    const failedIds: string[] = [];
+
+    for (const r of matches) {
+      if (r.stripe_payment_intent_id) {
+        try {
+          await getStripe().paymentIntents.capture(r.stripe_payment_intent_id);
+          acceptedIds.push(r.id);
+        } catch {
+          // Hold was never successfully authorized (e.g. card failed
+          // client-side) — don't let the DJ "play" money that isn't real.
+          failedIds.push(r.id);
+        }
+      } else {
+        acceptedIds.push(r.id);
+      }
+    }
+
+    if (acceptedIds.length) {
+      const { error } = await supabaseAdmin.from("requests").update({ status: "accepted" }).in("id", acceptedIds);
+      if (error) throw new Error(error.message);
+    }
+    if (failedIds.length) {
+      const { error } = await supabaseAdmin.from("requests").update({ status: "rejected" }).in("id", failedIds);
+      if (error) throw new Error(error.message);
+    }
+
+    res.json({ updated: acceptedIds.length, failed: failedIds.length });
   } catch (err) {
     res.status(400).json({ error: (err as Error).message });
   }
@@ -101,8 +148,28 @@ requestsRouter.post("/requests/:songGroup/accept", requireDj, async (req, res) =
 
 requestsRouter.post("/requests/:songGroup/reject", requireDj, async (req, res) => {
   try {
-    const result = await updateSongGroupStatus(String(req.params.songGroup), "rejected");
-    res.json(result);
+    const matches = await findPendingGroup(String(req.params.songGroup));
+    if (matches.length === 0) {
+      res.json({ updated: 0 });
+      return;
+    }
+
+    for (const r of matches) {
+      if (r.stripe_payment_intent_id) {
+        try {
+          await getStripe().paymentIntents.cancel(r.stripe_payment_intent_id);
+        } catch {
+          // Already canceled/captured/failed — DB status below is what the
+          // DJ dashboard actually reads, so this is safe to ignore.
+        }
+      }
+    }
+
+    const ids = matches.map((r) => r.id);
+    const { error } = await supabaseAdmin.from("requests").update({ status: "rejected" }).in("id", ids);
+    if (error) throw new Error(error.message);
+
+    res.json({ updated: ids.length });
   } catch (err) {
     res.status(400).json({ error: (err as Error).message });
   }
