@@ -42,7 +42,7 @@ export function useLiveRequests(eventId: string | null, columns: string = "*") {
         .select(columns)
         .eq("event_id", eventId)
         .order("created_at", { ascending: true });
-      if (!cancelled && !error && data) setRequests(data as RequestRow[]);
+      if (!cancelled && !error && data) setRequests(data as unknown as RequestRow[]);
       if (!cancelled) setLoading(false);
     }
 
