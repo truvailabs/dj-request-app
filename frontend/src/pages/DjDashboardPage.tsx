@@ -71,6 +71,7 @@ function TierEditorRow({
         disabled={busy}
         style={{
           flex: 1,
+          minWidth: 0,
           padding: "8px 10px",
           borderRadius: 8,
           border: `1px solid ${T.line}`,
@@ -261,6 +262,7 @@ function TierSettings({ eventId, djToken }: { eventId: string; djToken: string }
           placeholder="New tier name"
           style={{
             flex: 1,
+            minWidth: 0,
             padding: "8px 10px",
             borderRadius: 8,
             border: `1px solid ${T.line}`,

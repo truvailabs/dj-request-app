@@ -251,6 +251,7 @@ export default function AttendeePage() {
                 placeholder="Your name"
                 style={{
                   flex: 1,
+                  minWidth: 0,
                   padding: "10px 12px",
                   fontSize: 14,
                   borderRadius: 10,
@@ -265,6 +266,7 @@ export default function AttendeePage() {
                 placeholder="VIP code (optional)"
                 style={{
                   flex: 1,
+                  minWidth: 0,
                   padding: "10px 12px",
                   fontSize: 14,
                   borderRadius: 10,
