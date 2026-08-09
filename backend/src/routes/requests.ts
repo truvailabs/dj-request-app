@@ -47,12 +47,16 @@ requestsRouter.post("/requests", async (req, res) => {
     }
   }
 
-  let stripePaymentIntentId: string | null = null;
-  let clientSecret: string | null = null;
-
   if (event.payments_enabled && amount > 0) {
     // Manual capture: this only authorizes (holds) the card. Nothing is
     // charged until the DJ plays the song and Node explicitly captures it.
+    //
+    // Deliberately no DB row yet: if we inserted here, a cancelled/abandoned
+    // checkout would leave a phantom "pending" request the DJ (and public
+    // leaderboard) sees but that was never actually paid for. Instead the
+    // row gets created by the webhook on payment_intent.amount_capturable_updated
+    // — the event that fires only once the hold has genuinely succeeded —
+    // using this metadata to reconstruct it.
     const paymentIntent = await getStripe().paymentIntents.create({
       amount,
       currency: "usd",
@@ -63,13 +67,18 @@ requestsRouter.post("/requests", async (req, res) => {
       automatic_payment_methods: { enabled: true, allow_redirects: "never" },
       metadata: {
         event_id: event.id,
-        tier: tierName,
+        song_id: typeof songId === "string" ? songId : "",
         title: title.trim(),
         artist: artist.trim(),
+        bpm: typeof bpm === "number" ? String(bpm) : "",
+        tier: tierName,
+        tier_id: tierRowId ?? "",
+        requester_name: requesterName.trim(),
+        is_vip: String(isVip),
       },
     });
-    stripePaymentIntentId = paymentIntent.id;
-    clientSecret = paymentIntent.client_secret;
+    res.status(201).json({ request: null, clientSecret: paymentIntent.client_secret });
+    return;
   }
 
   const { data, error } = await supabaseAdmin
@@ -86,7 +95,7 @@ requestsRouter.post("/requests", async (req, res) => {
       is_vip: isVip,
       requester_name: requesterName.trim(),
       status: "pending",
-      stripe_payment_intent_id: stripePaymentIntentId,
+      stripe_payment_intent_id: null,
     })
     .select()
     .single();
@@ -96,7 +105,7 @@ requestsRouter.post("/requests", async (req, res) => {
     return;
   }
 
-  res.status(201).json({ request: data, clientSecret });
+  res.status(201).json({ request: data, clientSecret: null });
 });
 
 type PendingRow = { id: string; title: string; artist: string; stripe_payment_intent_id: string | null };

@@ -20,7 +20,7 @@ export async function createRequest(payload: CreateRequestPayload) {
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error ?? "Request failed");
-  return data as { request: RequestRow; clientSecret: string | null };
+  return data as { request: RequestRow | null; clientSecret: string | null };
 }
 
 export async function decideSongGroup(
