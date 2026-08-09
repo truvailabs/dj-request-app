@@ -4,17 +4,19 @@ export type ITunesResult = {
   artistName: string;
 };
 
-// Identification only — never persisted server-side. Just resolves a
-// title/artist to write onto the request row.
+const API_URL = import.meta.env.VITE_API_URL as string;
+
+// Proxied through our backend, not called directly from the browser: on iOS
+// Safari, itunes.apple.com/search redirects to a musics:// custom URL scheme
+// (an app-handoff attempt) that browsers refuse to follow cross-origin. Node
+// never hits that redirect. Identification only — never persisted server-side.
 export async function searchITunes(term: string): Promise<ITunesResult[]> {
   if (!term.trim()) return [];
-  const url = `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&media=music&entity=song&limit=8`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`iTunes search failed (${res.status})`);
+  const res = await fetch(`${API_URL}/itunes-search?term=${encodeURIComponent(term)}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `iTunes search failed (${res.status})`);
+  }
   const data = await res.json();
-  return (data.results ?? []).map((r: { trackId: number; trackName: string; artistName: string }) => ({
-    trackId: r.trackId,
-    trackName: r.trackName,
-    artistName: r.artistName,
-  }));
+  return data.results ?? [];
 }

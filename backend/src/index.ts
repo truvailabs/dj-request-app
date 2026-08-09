@@ -6,6 +6,7 @@ import { requestsRouter } from "./routes/requests.js";
 import { webhooksRouter } from "./routes/webhooks.js";
 import { tiersRouter } from "./routes/tiers.js";
 import { eventRouter } from "./routes/event.js";
+import { itunesRouter } from "./routes/itunes.js";
 
 const app = express();
 
@@ -22,6 +23,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 app.use(requestsRouter);
 app.use(tiersRouter);
 app.use(eventRouter);
+app.use(itunesRouter);
 
 app.listen(Number(env.port), () => {
   console.log(`API listening on :${env.port}`);
