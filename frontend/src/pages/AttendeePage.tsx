@@ -5,10 +5,9 @@ import { useTiers } from "../lib/useTiers";
 import { groupRequests, normalize } from "../lib/songGroup";
 import { searchITunes, type ITunesResult } from "../lib/itunes";
 import { createRequest } from "../lib/api";
-import { supabase } from "../lib/supabase";
 import { T } from "../lib/theme";
 import PaidCheckout from "../components/PaidCheckout";
-import type { SongRow, TierRow } from "../lib/types";
+import type { TierRow } from "../lib/types";
 
 type Selection = { title: string; artist: string; bpm: number | null; songId: string | null };
 
@@ -30,10 +29,8 @@ export default function AttendeePage() {
   const { requests } = useLiveRequests(event?.id ?? null, ANON_SAFE_REQUEST_COLUMNS);
   const { tiers } = useTiers(event?.id ?? null);
 
-  const [mode, setMode] = useState<"setlist" | "itunes">("setlist");
   const [query, setQuery] = useState("");
-  const [setlistResults, setSetlistResults] = useState<SongRow[]>([]);
-  const [itunesResults, setItunesResults] = useState<ITunesResult[]>([]);
+  const [results, setResults] = useState<ITunesResult[]>([]);
   const [picked, setPicked] = useState<Selection | null>(null);
   const [requesterName, setRequesterName] = useState("");
   const [vipCode, setVipCode] = useState("");
@@ -45,52 +42,22 @@ export default function AttendeePage() {
   const [searchError, setSearchError] = useState<string | null>(null);
   const searchSeq = useRef(0);
 
-  const results = mode === "setlist" ? setlistResults : itunesResults;
-
   async function runSearch(term: string) {
     setQuery(term);
     setPicked(null);
     setSearchError(null);
     const seq = ++searchSeq.current;
 
-    if (mode === "setlist") {
-      if (!event || !term.trim()) {
-        setSetlistResults([]);
-        return;
-      }
-      try {
-        const { data, error } = await supabase
-          .from("songs")
-          .select("*")
-          .eq("event_id", event.id)
-          .or(`title.ilike.%${term}%,artist.ilike.%${term}%`)
-          .limit(8);
-        if (error) throw new Error(error.message);
-        if (seq === searchSeq.current) setSetlistResults(data as SongRow[]);
-      } catch (err) {
-        if (seq === searchSeq.current) setSearchError((err as Error).message);
-      }
-    } else {
-      if (!term.trim()) {
-        setItunesResults([]);
-        return;
-      }
-      try {
-        const found = await searchITunes(term);
-        if (seq === searchSeq.current) setItunesResults(found);
-      } catch (err) {
-        if (seq === searchSeq.current) setSearchError((err as Error).message);
-      }
+    if (!term.trim()) {
+      setResults([]);
+      return;
     }
-  }
-
-  function switchMode(next: "setlist" | "itunes") {
-    setMode(next);
-    setQuery("");
-    setSetlistResults([]);
-    setItunesResults([]);
-    setPicked(null);
-    setSearchError(null);
+    try {
+      const found = await searchITunes(term);
+      if (seq === searchSeq.current) setResults(found);
+    } catch (err) {
+      if (seq === searchSeq.current) setSearchError((err as Error).message);
+    }
   }
 
   function finishSuccess(t: TierRow) {
@@ -108,8 +75,7 @@ export default function AttendeePage() {
     setCheckout(null);
     setPicked(null);
     setQuery("");
-    setSetlistResults([]);
-    setItunesResults([]);
+    setResults([]);
     setVipCode("");
   }
 
@@ -196,27 +162,6 @@ export default function AttendeePage() {
           </p>
         </header>
 
-        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-          {(["setlist", "itunes"] as const).map((m) => (
-            <button
-              key={m}
-              onClick={() => switchMode(m)}
-              style={{
-                padding: "8px 18px",
-                borderRadius: 99,
-                border: `1px solid ${mode === m ? "transparent" : T.line}`,
-                background: mode === m ? T.grad : "transparent",
-                color: mode === m ? "#1A0A12" : T.muted,
-                fontWeight: 700,
-                fontSize: 13,
-                letterSpacing: ".02em",
-              }}
-            >
-              {m === "setlist" ? "Setlist" : "Search any song"}
-            </button>
-          ))}
-        </div>
-
         <input
           value={query}
           onChange={(e) => runSearch(e.target.value)}
@@ -238,62 +183,35 @@ export default function AttendeePage() {
             className="rise"
             style={{ marginTop: 10, borderRadius: 14, border: `1px solid ${T.line}`, overflow: "hidden" }}
           >
-            {mode === "setlist"
-              ? setlistResults.map((s, i) => (
-                  <button
-                    key={s.id}
-                    onClick={() => setPicked({ title: s.title, artist: s.artist, bpm: s.bpm, songId: s.id })}
-                    style={{
-                      display: "flex",
-                      width: "100%",
-                      textAlign: "left",
-                      alignItems: "center",
-                      gap: 12,
-                      padding: "12px 14px",
-                      background: T.surface,
-                      border: "none",
-                      borderTop: i ? `1px solid ${T.line}` : "none",
-                      color: T.ink,
-                    }}
-                  >
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 600, fontSize: 15 }}>{s.title}</div>
-                      <div style={{ color: T.muted, fontSize: 13 }}>{s.artist}</div>
-                    </div>
-                    <span style={{ color: T.hot, fontWeight: 700, fontSize: 13 }}>Request →</span>
-                  </button>
-                ))
-              : itunesResults.map((r, i) => (
-                  <button
-                    key={r.trackId}
-                    onClick={() =>
-                      setPicked({ title: r.trackName, artist: r.artistName, bpm: null, songId: null })
-                    }
-                    style={{
-                      display: "flex",
-                      width: "100%",
-                      textAlign: "left",
-                      alignItems: "center",
-                      gap: 12,
-                      padding: "12px 14px",
-                      background: T.surface,
-                      border: "none",
-                      borderTop: i ? `1px solid ${T.line}` : "none",
-                      color: T.ink,
-                    }}
-                  >
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 600, fontSize: 15 }}>{r.trackName}</div>
-                      <div style={{ color: T.muted, fontSize: 13 }}>{r.artistName}</div>
-                    </div>
-                    <span style={{ color: T.hot, fontWeight: 700, fontSize: 13 }}>Request →</span>
-                  </button>
-                ))}
+            {results.map((r, i) => (
+              <button
+                key={r.trackId}
+                onClick={() => setPicked({ title: r.trackName, artist: r.artistName, bpm: null, songId: null })}
+                style={{
+                  display: "flex",
+                  width: "100%",
+                  textAlign: "left",
+                  alignItems: "center",
+                  gap: 12,
+                  padding: "12px 14px",
+                  background: T.surface,
+                  border: "none",
+                  borderTop: i ? `1px solid ${T.line}` : "none",
+                  color: T.ink,
+                }}
+              >
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: 15 }}>{r.trackName}</div>
+                  <div style={{ color: T.muted, fontSize: 13 }}>{r.artistName}</div>
+                </div>
+                <span style={{ color: T.hot, fontWeight: 700, fontSize: 13 }}>Request →</span>
+              </button>
+            ))}
           </div>
         )}
         {searchError && (
           <p style={{ color: T.hot, fontSize: 14, marginTop: 12 }}>
-            Search failed: {searchError}. Try the Setlist tab, or ask the DJ directly.
+            Search failed: {searchError}. Try again, or ask the DJ directly.
           </p>
         )}
         {!searchError && query && results.length === 0 && !picked && (
