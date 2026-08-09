@@ -42,6 +42,7 @@ export default function AttendeePage() {
   const [toast, setToast] = useState<string | null>(null);
   const [pulseKey, setPulseKey] = useState<string | null>(null);
   const [checkout, setCheckout] = useState<{ clientSecret: string; tier: TierRow } | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const searchSeq = useRef(0);
 
   const results = mode === "setlist" ? setlistResults : itunesResults;
@@ -49,6 +50,7 @@ export default function AttendeePage() {
   async function runSearch(term: string) {
     setQuery(term);
     setPicked(null);
+    setSearchError(null);
     const seq = ++searchSeq.current;
 
     if (mode === "setlist") {
@@ -56,20 +58,29 @@ export default function AttendeePage() {
         setSetlistResults([]);
         return;
       }
-      const { data } = await supabase
-        .from("songs")
-        .select("*")
-        .eq("event_id", event.id)
-        .or(`title.ilike.%${term}%,artist.ilike.%${term}%`)
-        .limit(8);
-      if (seq === searchSeq.current) setSetlistResults((data as SongRow[]) ?? []);
+      try {
+        const { data, error } = await supabase
+          .from("songs")
+          .select("*")
+          .eq("event_id", event.id)
+          .or(`title.ilike.%${term}%,artist.ilike.%${term}%`)
+          .limit(8);
+        if (error) throw new Error(error.message);
+        if (seq === searchSeq.current) setSetlistResults(data as SongRow[]);
+      } catch (err) {
+        if (seq === searchSeq.current) setSearchError((err as Error).message);
+      }
     } else {
       if (!term.trim()) {
         setItunesResults([]);
         return;
       }
-      const found = await searchITunes(term);
-      if (seq === searchSeq.current) setItunesResults(found);
+      try {
+        const found = await searchITunes(term);
+        if (seq === searchSeq.current) setItunesResults(found);
+      } catch (err) {
+        if (seq === searchSeq.current) setSearchError((err as Error).message);
+      }
     }
   }
 
@@ -79,6 +90,7 @@ export default function AttendeePage() {
     setSetlistResults([]);
     setItunesResults([]);
     setPicked(null);
+    setSearchError(null);
   }
 
   function finishSuccess(t: TierRow) {
@@ -279,7 +291,12 @@ export default function AttendeePage() {
                 ))}
           </div>
         )}
-        {query && results.length === 0 && !picked && (
+        {searchError && (
+          <p style={{ color: T.hot, fontSize: 14, marginTop: 12 }}>
+            Search failed: {searchError}. Try the Setlist tab, or ask the DJ directly.
+          </p>
+        )}
+        {!searchError && query && results.length === 0 && !picked && (
           <p style={{ color: T.muted, fontSize: 14, marginTop: 12 }}>
             Nothing matched — try another spelling, or ask the DJ directly.
           </p>

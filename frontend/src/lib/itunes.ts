@@ -10,7 +10,7 @@ export async function searchITunes(term: string): Promise<ITunesResult[]> {
   if (!term.trim()) return [];
   const url = `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&media=music&entity=song&limit=8`;
   const res = await fetch(url);
-  if (!res.ok) return [];
+  if (!res.ok) throw new Error(`iTunes search failed (${res.status})`);
   const data = await res.json();
   return (data.results ?? []).map((r: { trackId: number; trackName: string; artistName: string }) => ({
     trackId: r.trackId,
