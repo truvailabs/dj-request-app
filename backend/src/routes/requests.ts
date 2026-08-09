@@ -7,14 +7,8 @@ import { getStripe } from "../lib/stripe.js";
 
 export const requestsRouter = Router();
 
-const TIER_AMOUNTS: Record<string, number> = {
-  free: 0,
-  boost: 500,
-  front: 2000,
-};
-
 requestsRouter.post("/requests", async (req, res) => {
-  const { title, artist, bpm, songId, tier, requesterName, vipCode } = req.body ?? {};
+  const { title, artist, bpm, songId, tierId, requesterName, vipCode } = req.body ?? {};
 
   if (typeof title !== "string" || !title.trim() || typeof artist !== "string" || !artist.trim()) {
     res.status(400).json({ error: "title and artist are required" });
@@ -29,10 +23,29 @@ requestsRouter.post("/requests", async (req, res) => {
   const isVip = typeof vipCode === "string" && vipCode.trim().length > 0 && vipCode.trim() === event.vip_code;
 
   // Server decides the real tier/amount — never trust the client for money.
-  // While payments are off, every request is free regardless of what tier the client selected.
-  const requestedTier = typeof tier === "string" && tier in TIER_AMOUNTS ? tier : "free";
-  const effectiveTier = event.payments_enabled ? requestedTier : "free";
-  const amount = event.payments_enabled ? TIER_AMOUNTS[effectiveTier] : 0;
+  // While payments are off, every request is free regardless of what tier
+  // (or tier price) the DJ has configured.
+  let tierName = "Free";
+  let tierRowId: string | null = null;
+  let amount = 0;
+
+  if (event.payments_enabled && typeof tierId === "string") {
+    const { data: tierRow, error: tierError } = await supabaseAdmin
+      .from("tiers")
+      .select("id, name, amount")
+      .eq("id", tierId)
+      .eq("event_id", event.id)
+      .maybeSingle();
+    if (tierError) {
+      res.status(500).json({ error: tierError.message });
+      return;
+    }
+    if (tierRow) {
+      tierName = tierRow.name;
+      tierRowId = tierRow.id;
+      amount = tierRow.amount;
+    }
+  }
 
   let stripePaymentIntentId: string | null = null;
   let clientSecret: string | null = null;
@@ -50,7 +63,7 @@ requestsRouter.post("/requests", async (req, res) => {
       automatic_payment_methods: { enabled: true, allow_redirects: "never" },
       metadata: {
         event_id: event.id,
-        tier: effectiveTier,
+        tier: tierName,
         title: title.trim(),
         artist: artist.trim(),
       },
@@ -67,7 +80,8 @@ requestsRouter.post("/requests", async (req, res) => {
       title: title.trim(),
       artist: artist.trim(),
       bpm: typeof bpm === "number" ? bpm : null,
-      tier: effectiveTier,
+      tier: tierName,
+      tier_id: tierRowId,
       amount,
       is_vip: isVip,
       requester_name: requesterName.trim(),

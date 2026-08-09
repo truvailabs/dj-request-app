@@ -1,33 +1,34 @@
 import { useRef, useState } from "react";
 import { useActiveEvent } from "../lib/useActiveEvent";
 import { useLiveRequests, ANON_SAFE_REQUEST_COLUMNS } from "../lib/useLiveRequests";
+import { useTiers } from "../lib/useTiers";
 import { groupRequests, normalize } from "../lib/songGroup";
 import { searchITunes, type ITunesResult } from "../lib/itunes";
 import { createRequest } from "../lib/api";
 import { supabase } from "../lib/supabase";
 import { T } from "../lib/theme";
 import PaidCheckout from "../components/PaidCheckout";
-import type { SongRow, Tier } from "../lib/types";
+import type { SongRow, TierRow } from "../lib/types";
 
 type Selection = { title: string; artist: string; bpm: number | null; songId: string | null };
 
-type TierDef = { id: Tier; label: string; amount: number };
-
-const TIER_DEFS: TierDef[] = [
-  { id: "free", label: "Free request", amount: 0 },
-  { id: "boost", label: "Boost — $5", amount: 5 },
-  { id: "front", label: "Front of line — $20", amount: 20 },
-];
-
-function tierNote(t: TierDef, paymentsEnabled: boolean): string {
-  if (t.id === "free") return "Joins the open pool";
-  if (!paymentsEnabled) return "Free tonight";
-  return t.id === "boost" ? "Sorts above free requests" : "Top of the DJ's queue";
+function formatAmount(cents: number): string {
+  return cents % 100 === 0 ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`;
 }
+
+const FALLBACK_TIER: TierRow = {
+  id: "",
+  event_id: "",
+  name: "Free request",
+  amount: 0,
+  sort_order: 0,
+  created_at: "",
+};
 
 export default function AttendeePage() {
   const { event, loading: eventLoading, error: eventError } = useActiveEvent();
   const { requests } = useLiveRequests(event?.id ?? null, ANON_SAFE_REQUEST_COLUMNS);
+  const { tiers } = useTiers(event?.id ?? null);
 
   const [mode, setMode] = useState<"setlist" | "itunes">("setlist");
   const [query, setQuery] = useState("");
@@ -40,7 +41,7 @@ export default function AttendeePage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [pulseKey, setPulseKey] = useState<string | null>(null);
-  const [checkout, setCheckout] = useState<{ clientSecret: string; tier: TierDef } | null>(null);
+  const [checkout, setCheckout] = useState<{ clientSecret: string; tier: TierRow } | null>(null);
   const searchSeq = useRef(0);
 
   const results = mode === "setlist" ? setlistResults : itunesResults;
@@ -80,7 +81,7 @@ export default function AttendeePage() {
     setPicked(null);
   }
 
-  function finishSuccess(t: TierDef) {
+  function finishSuccess(t: TierRow) {
     if (picked) {
       const key = `${normalize(picked.title)}::${normalize(picked.artist)}`;
       setPulseKey(key);
@@ -88,7 +89,7 @@ export default function AttendeePage() {
     }
     setToast(
       t.amount > 0
-        ? `$${t.amount} hold placed — charged only if the DJ plays it`
+        ? `${formatAmount(t.amount)} hold placed — charged only if the DJ plays it`
         : "Request sent to the DJ",
     );
     setTimeout(() => setToast(null), 2600);
@@ -100,7 +101,7 @@ export default function AttendeePage() {
     setVipCode("");
   }
 
-  async function chooseTier(t: TierDef) {
+  async function chooseTier(t: TierRow) {
     if (!picked || !requesterName.trim() || submitting) return;
     setSubmitting(true);
     setSubmitError(null);
@@ -110,7 +111,7 @@ export default function AttendeePage() {
         artist: picked.artist,
         bpm: picked.bpm,
         songId: picked.songId,
-        tier: t.id,
+        tierId: t.id || undefined,
         requesterName: requesterName.trim(),
         vipCode: vipCode.trim() || undefined,
       });
@@ -341,9 +342,9 @@ export default function AttendeePage() {
 
             {!checkout && (
               <div style={{ display: "grid", gap: 8, marginTop: 14 }}>
-                {TIER_DEFS.map((t) => (
+                {(tiers.length > 0 ? tiers : [FALLBACK_TIER]).map((t) => (
                   <button
-                    key={t.id}
+                    key={t.id || "fallback"}
                     onClick={() => chooseTier(t)}
                     disabled={!canSubmit}
                     style={{
@@ -362,9 +363,13 @@ export default function AttendeePage() {
                       cursor: canSubmit ? "pointer" : "not-allowed",
                     }}
                   >
-                    <span>{t.label}</span>
+                    <span>{t.name}</span>
                     <span style={{ fontWeight: 400, fontSize: 12, opacity: 0.75 }}>
-                      {tierNote(t, event.payments_enabled)}
+                      {t.amount === 0
+                        ? "Free"
+                        : !event.payments_enabled
+                          ? `${formatAmount(t.amount)} · free tonight`
+                          : formatAmount(t.amount)}
                     </span>
                   </button>
                 ))}
@@ -374,7 +379,7 @@ export default function AttendeePage() {
             {checkout && (
               <PaidCheckout
                 clientSecret={checkout.clientSecret}
-                amountLabel={`$${checkout.tier.amount}`}
+                amountLabel={formatAmount(checkout.tier.amount)}
                 onSuccess={() => finishSuccess(checkout.tier)}
                 onCancel={() => setCheckout(null)}
               />

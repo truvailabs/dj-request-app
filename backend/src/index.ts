@@ -4,6 +4,8 @@ import cors from "cors";
 import { env } from "./lib/env.js";
 import { requestsRouter } from "./routes/requests.js";
 import { webhooksRouter } from "./routes/webhooks.js";
+import { tiersRouter } from "./routes/tiers.js";
+import { eventRouter } from "./routes/event.js";
 
 const app = express();
 
@@ -18,6 +20,8 @@ app.use(express.json());
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 app.use(requestsRouter);
+app.use(tiersRouter);
+app.use(eventRouter);
 
 app.listen(Number(env.port), () => {
   console.log(`API listening on :${env.port}`);

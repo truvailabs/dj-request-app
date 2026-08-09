@@ -17,7 +17,19 @@ export type SongRow = {
   created_at: string;
 };
 
-export type Tier = "free" | "boost" | "front";
+// Denormalized label snapshot of whatever tier was picked at request time —
+// stays correct even if the tier is later renamed/deleted. See TierRow for
+// the live, DJ-editable tier definitions.
+export type Tier = string;
+
+export type TierRow = {
+  id: string;
+  event_id: string;
+  name: string;
+  amount: number;
+  sort_order: number;
+  created_at: string;
+};
 
 export type RequestRow = {
   id: string;

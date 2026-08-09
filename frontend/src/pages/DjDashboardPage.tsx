@@ -1,12 +1,13 @@
 import { useMemo, useState } from "react";
 import { useActiveEvent } from "../lib/useActiveEvent";
 import { useLiveRequests } from "../lib/useLiveRequests";
+import { useTiers } from "../lib/useTiers";
 import { useDjSession } from "../lib/useDjSession";
 import { groupRequests, encodeSongGroup } from "../lib/songGroup";
-import { decideSongGroup } from "../lib/api";
+import { decideSongGroup, createTier, updateTier, deleteTier, updateEventSettings } from "../lib/api";
 import { supabase } from "../lib/supabase";
 import { T } from "../lib/theme";
-import type { SongGroup } from "../lib/types";
+import type { EventRow, SongGroup, TierRow } from "../lib/types";
 
 type Filter = "all" | "vip" | "paid" | "10plus";
 
@@ -16,6 +17,306 @@ const FILTERS: [Filter, string][] = [
   ["paid", "Paid"],
   ["10plus", "$10+"],
 ];
+
+function TierEditorRow({
+  tier,
+  djToken,
+  busyId,
+  setBusyId,
+  setError,
+}: {
+  tier: TierRow;
+  djToken: string;
+  busyId: string | null;
+  setBusyId: (id: string | null) => void;
+  setError: (msg: string | null) => void;
+}) {
+  const [name, setName] = useState(tier.name);
+  const [dollars, setDollars] = useState(tier.amount === 0 ? "" : String(tier.amount / 100));
+  const busy = busyId === tier.id;
+  const dirty = name !== tier.name || dollars !== (tier.amount === 0 ? "" : String(tier.amount / 100));
+
+  async function save() {
+    const parsed = Number(dollars);
+    const amount = dollars.trim() === "" || !Number.isFinite(parsed) || parsed < 0 ? 0 : Math.round(parsed * 100);
+    if (!name.trim()) return;
+    setBusyId(tier.id);
+    setError(null);
+    try {
+      await updateTier(tier.id, { name: name.trim(), amount }, djToken);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function remove() {
+    setBusyId(tier.id);
+    setError(null);
+    try {
+      await deleteTier(tier.id, djToken);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <input
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        disabled={busy}
+        style={{
+          flex: 1,
+          padding: "8px 10px",
+          borderRadius: 8,
+          border: `1px solid ${T.line}`,
+          background: T.room,
+          color: T.ink,
+          fontSize: 13,
+          fontFamily: "inherit",
+        }}
+      />
+      <div style={{ position: "relative", width: 90 }}>
+        <span style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", color: T.muted, fontSize: 13 }}>
+          $
+        </span>
+        <input
+          value={dollars}
+          onChange={(e) => setDollars(e.target.value)}
+          placeholder="0"
+          disabled={busy}
+          style={{
+            width: "100%",
+            boxSizing: "border-box",
+            padding: "8px 10px 8px 18px",
+            borderRadius: 8,
+            border: `1px solid ${T.line}`,
+            background: T.room,
+            color: T.ink,
+            fontSize: 13,
+            fontFamily: "inherit",
+          }}
+        />
+      </div>
+      <button
+        onClick={save}
+        disabled={busy || !dirty}
+        style={{
+          padding: "8px 10px",
+          borderRadius: 8,
+          border: "none",
+          background: dirty ? T.grad : T.line,
+          color: dirty ? "#1A0A12" : T.muted,
+          fontWeight: 700,
+          fontSize: 11,
+          fontFamily: "inherit",
+          opacity: busy ? 0.6 : 1,
+        }}
+      >
+        SAVE
+      </button>
+      <button
+        onClick={remove}
+        disabled={busy}
+        style={{
+          padding: "8px 10px",
+          borderRadius: 8,
+          border: `1px solid ${T.line}`,
+          background: "transparent",
+          color: T.muted,
+          fontWeight: 700,
+          fontSize: 11,
+          fontFamily: "inherit",
+          opacity: busy ? 0.6 : 1,
+        }}
+      >
+        REMOVE
+      </button>
+    </div>
+  );
+}
+
+function PaymentsToggle({ event, djToken }: { event: EventRow; djToken: string }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const on = event.payments_enabled;
+
+  async function toggle() {
+    setBusy(true);
+    setError(null);
+    try {
+      await updateEventSettings(!on, djToken);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      style={{
+        padding: "14px",
+        borderRadius: 10,
+        background: T.surface,
+        border: `1px solid ${on ? T.hot : T.line}`,
+        marginBottom: 16,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <button
+          onClick={toggle}
+          disabled={busy}
+          style={{
+            width: 44,
+            height: 24,
+            borderRadius: 99,
+            border: "none",
+            background: on ? T.grad : T.line,
+            position: "relative",
+            flexShrink: 0,
+            opacity: busy ? 0.6 : 1,
+          }}
+        >
+          <span
+            style={{
+              position: "absolute",
+              top: 3,
+              left: on ? 23 : 3,
+              width: 18,
+              height: 18,
+              borderRadius: 99,
+              background: on ? "#1A0A12" : T.muted,
+              transition: "left .15s ease",
+            }}
+          />
+        </button>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: on ? T.ink : T.muted }}>
+            PAYMENTS {on ? "ON" : "OFF"}
+          </div>
+          <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>
+            {on
+              ? "Live — paid tiers create real Stripe holds."
+              : "Off — every request is free, regardless of tier. Only flip on after your live smoke test passes."}
+          </div>
+        </div>
+      </div>
+      {error && <p style={{ color: T.hot, fontSize: 12, marginTop: 10, marginBottom: 0 }}>{error}</p>}
+    </div>
+  );
+}
+
+function TierSettings({ eventId, djToken }: { eventId: string; djToken: string }) {
+  const { tiers } = useTiers(eventId);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [newName, setNewName] = useState("");
+  const [newDollars, setNewDollars] = useState("");
+
+  async function addTier() {
+    if (!newName.trim()) return;
+    const parsed = Number(newDollars);
+    const amount = newDollars.trim() === "" || !Number.isFinite(parsed) || parsed < 0 ? 0 : Math.round(parsed * 100);
+    setBusyId("new");
+    setError(null);
+    try {
+      await createTier(newName.trim(), amount, djToken);
+      setNewName("");
+      setNewDollars("");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <div
+      style={{
+        padding: "14px",
+        borderRadius: 10,
+        background: T.surface,
+        border: `1px solid ${T.line}`,
+        marginBottom: 16,
+      }}
+    >
+      <h2 style={{ fontSize: 11, letterSpacing: ".14em", color: T.muted, fontWeight: 700, margin: "0 0 10px" }}>
+        REQUEST TIERS
+      </h2>
+      <div style={{ display: "grid", gap: 8 }}>
+        {tiers.map((t) => (
+          <TierEditorRow key={t.id} tier={t} djToken={djToken} busyId={busyId} setBusyId={setBusyId} setError={setError} />
+        ))}
+      </div>
+
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
+        <input
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          placeholder="New tier name"
+          style={{
+            flex: 1,
+            padding: "8px 10px",
+            borderRadius: 8,
+            border: `1px solid ${T.line}`,
+            background: T.room,
+            color: T.ink,
+            fontSize: 13,
+            fontFamily: "inherit",
+          }}
+        />
+        <div style={{ position: "relative", width: 90 }}>
+          <span style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", color: T.muted, fontSize: 13 }}>
+            $
+          </span>
+          <input
+            value={newDollars}
+            onChange={(e) => setNewDollars(e.target.value)}
+            placeholder="0"
+            style={{
+              width: "100%",
+              boxSizing: "border-box",
+              padding: "8px 10px 8px 18px",
+              borderRadius: 8,
+              border: `1px solid ${T.line}`,
+              background: T.room,
+              color: T.ink,
+              fontSize: 13,
+              fontFamily: "inherit",
+            }}
+          />
+        </div>
+        <button
+          onClick={addTier}
+          disabled={busyId === "new" || !newName.trim()}
+          style={{
+            padding: "8px 14px",
+            borderRadius: 8,
+            border: "none",
+            background: T.grad,
+            color: "#1A0A12",
+            fontWeight: 700,
+            fontSize: 11,
+            fontFamily: "inherit",
+            opacity: busyId === "new" || !newName.trim() ? 0.6 : 1,
+          }}
+        >
+          ADD TIER
+        </button>
+      </div>
+
+      {error && <p style={{ color: T.hot, fontSize: 12, marginTop: 10, marginBottom: 0 }}>{error}</p>}
+      <p style={{ color: T.muted, fontSize: 11, marginTop: 10, marginBottom: 0 }}>
+        $0 tiers are free. Amounts only apply once payments are enabled for tonight.
+      </p>
+    </div>
+  );
+}
 
 export default function DjDashboardPage() {
   const { session } = useDjSession();
@@ -27,6 +328,7 @@ export default function DjDashboardPage() {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [pulseKey, setPulseKey] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
 
   const pending = requests.filter((r) => r.status === "pending");
   const acceptedRows = requests.filter((r) => r.status === "accepted");
@@ -125,6 +427,20 @@ export default function DjDashboardPage() {
               </div>
             </div>
             <button
+              onClick={() => setShowSettings((v) => !v)}
+              style={{
+                padding: "6px 12px",
+                borderRadius: 8,
+                border: `1px solid ${showSettings ? T.hot : T.line}`,
+                background: showSettings ? `${T.hot}1A` : "transparent",
+                color: showSettings ? T.ink : T.muted,
+                fontWeight: 700,
+                fontSize: 11,
+              }}
+            >
+              SETTINGS
+            </button>
+            <button
               onClick={() => supabase.auth.signOut()}
               style={{
                 padding: "6px 12px",
@@ -140,6 +456,13 @@ export default function DjDashboardPage() {
             </button>
           </div>
         </header>
+
+        {showSettings && session && (
+          <>
+            <PaymentsToggle event={event} djToken={session.access_token} />
+            <TierSettings eventId={event.id} djToken={session.access_token} />
+          </>
+        )}
 
         <div
           style={{
